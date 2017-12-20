@@ -49,13 +49,26 @@ def get_model(num_users, num_items, latent_dim, regs=[0, 0]):
 		#GMF latent vectors of user and item
         user_latent = tf.reshape(MF_embedding_user, [-1,latent_dim])
         item_latent = tf.reshape(MF_embedding_item, [-1,latent_dim])
-        print(user_latent.get_shape())
+        
 		#Element-wise product of user and item embedding
         product_vector = tf.multiply(user_latent,item_latent,name="GMF_product_vector")
-        label = tf.placeholder(shape=(1,),dtype='int32',name='label')
+        label = tf.placeholder(shape=(1,1),dtype='float32',name='label')
         output = tf.identity(tf.layers.dense(product_vector, 1, activation=tf.sigmoid, kernel_initializer=tf.initializers.random_uniform), name="GMF_output")
         #prediction = tf.layers.Dense(units=1, activation=tf.sigmoid, kernel_initializer=tf.keras.initializers.lecun_uniform)(product_vector)
     return model
+
+def getHitRatio(ranklist, gtItem):
+    for item in ranklist:
+        if item == gtItem:
+            return 1
+    return 0
+
+def getNDCG(ranklist, gtItem):
+    for i in range(len(ranklist)):
+        item = ranklist[i]
+        if item == gtItem:
+            return math.log(2) / math.log(i+2)
+    return 0
 
 def get_train_instances(train, num_negatives):
     user_input, item_input, labels = [],[],[]
@@ -100,42 +113,56 @@ if __name__ == '__main__':
           %(time()-t1, num_users, num_items, train.nnz, len(testRatings)))
     print("token-1")
     model = get_model(num_users, num_items, num_factors, regs)
-    print("token0")
-    user_input = model.get_operation_by_name("GMF_input_user")
-    item_input = model.get_operation_by_name("GMF_input_item")
-    output = model.get_operation_by_name("GMF_output")
-    label =  model.get_operation_by_name("label")
-    loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=label, logits=output)
-    print("token0")
-    optimizer = tf.train.AdagradOptimizer(learning_rate=learning_rate)
-    train_step = optimizer.minimize(loss)
-    
-    best_hr, best_ndcg, best_iter = 0, 0, -1
+    with model.as_default():
+	    print("token0")
+	    user_input = model.get_tensor_by_name("GMF_input_user:0")
+	    item_input = model.get_tensor_by_name("GMF_input_item:0")
+	    output = model.get_tensor_by_name("GMF_output:0")
+	    label =  model.get_tensor_by_name("label:0")
+	    loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=label, logits=output)
+	    print("token0")
+	    optimizer = tf.train.AdagradOptimizer(learning_rate=learning_rate)
+	    train_step = optimizer.minimize(loss)
+	    
+	    best_hr, best_ndcg, best_iter = 0, 0, -1
 
-    init = tf.tf.global_variables_initializer()
+	    init = tf.global_variables_initializer()
 
 
-    sess = tf.Session()
-    print("token")
-    sess.run(init)
+	    sess = tf.Session()
+	    print("token")
+	    sess.run(init)
 
-    for epoch in range(epochs):
-        t1 = time()
-        # Generate training instances
-        user_input_set, item_input_set, labels = get_train_instances(train, num_negatives)
-        print(user_input_set)
-        print(item_input_set)
-        print(labels)
-        # Training
+	    for epoch in range(epochs):
+	        t1 = time()
+	        # Generate training instances
+	        user_input_set, item_input_set, labels = get_train_instances(train, num_negatives)
+	        # Training
 
-        train_data={user_input: user_input_set, item_input: item_input_set, label: labels}
-        sess.run([train_step, loss], feed_dict=train_data)
+	        train_data={user_input, item_input, label in zip(user_input_set, item_input_set, labels)}
 
-        t2 = time()
-        print(t1+"-"+t2)
-    for idx in range(len(testRatings)):
-        u = rating[0]
-        gtItem = rating[1]
-
-        print(tf.Session.run(loss, {user_input:u, item_input:gtItem}))
+	        t2 = time()
+	        print(t2-t1)
+	    for idx in range(len(testRatings)):
+	    	rating= testRatings[idx]
+	    	items = testNegatives[idx]
+	    	rating = np.reshape(rating, (2,1,))
+	    	items = np.reshape(items, (99,1,))
+	    	u = rating[0]
+	    	print(u)
+	    	gtItem = rating[1]
+	    	print(gtItem)
+	    	np.append(items, [gtItem])
+	    	map_item_score = {}
+	    	prediction = []
+	    	for item_idx in range(len(items)):
+	    		prediction.append(sess.run(output, {user_input: u, item_input: items[item_idx]}))
+	    	for count in range(len(items)):
+	    		item = items[count]
+	    		map_item_score[item] = prediction[count]
+	    	items.pop()
+	    	ranklist = heapq.nlargest(_K, map_item_score, key=map_item_score.get)
+	    	hr = getHitRatio(ranklist, gtItem)
+	    	ndcg = getNDCG(ranklist, gtItem)
+	    	print("HR = %.4f, NDCG = %.4f." %(hr, ndcg) )
     
